@@ -15,9 +15,10 @@ executable emna
   ghc-options:         -dynamic -threaded
   -- other-modules:
   build-depends:       base,
-                       tip-haskell-frontend >=0.2,
+                       tip-ghc >=0.2,
                        tip-spec,
                        tip-lib >=0.2,
+                       tip-types >= 0.2,
                        geniplate-mirror >=0.7,
                        stm-promise,
                        pretty,

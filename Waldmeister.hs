@@ -25,7 +25,49 @@ validChar x
   | x `elem` ("~!@$%^&*_-+=<>.?/" :: String) = [x]
   | otherwise                                = ""
 
-type AxInfo = [(Info String,(Term,Term))]
+type AxInfo = [(Info,(Term,Term))]
+
+data Info =
+    Definition String
+  | IH Int
+  | Lemma Int
+  | DataDomain String
+  | DataProjection String
+  | DataDistinct String
+  | UserAsserted
+  | Other
+  deriving (Eq, Ord, Show)
+
+info :: HasAttr a => a -> Info
+info x
+  | hasAttr definition x,
+    Just f <- getAttr source x =
+    Definition (name f)
+  | Just i <- getAttr inductionHypothesis x =
+    IH i
+  | Just i <- getAttr speculatedLemma x =
+    Lemma i
+  | hasAttr dataDomain x,
+    Just d <- getAttr source x =
+    DataDomain (name d)
+  | hasAttr dataProjection x,
+    Just d <- getAttr source x =
+    DataProjection (name d)
+  | hasAttr dataDistinct x,
+    Just d <- getAttr source x =
+    DataDistinct (name d)
+  | hasAttr userAsserted x =
+    UserAsserted
+  | otherwise =
+    Other
+  where
+    name = reverse . takeWhile (/= '.') . reverse
+
+speculatedLemma :: Attr Int
+speculatedLemma = readAttr "speculated-lemma"
+
+userAsserted :: Attr ()
+userAsserted = unitAttr "user-asserted"
 
 ppTheory :: (Ord a,PrettyVar a) => Theory a -> (Doc,AxInfo)
 ppTheory
@@ -51,7 +93,7 @@ ppTheory
     , "EQUATIONS" $\ vcat (map ppFormula as)
     , "CONCLUSION" $\ ppFormula g
     ]
-  , [ (i,(toTerm (fmap varStr e1),toTerm (fmap varStr e2)))
+  , [ (info i,(toTerm (fmap varStr e1),toTerm (fmap varStr e2)))
     | Formula _ i _ (forallView -> (_,Builtin Equal :@: [e1,e2])) <- as
     ]
   )
@@ -63,7 +105,7 @@ ppType (TyCon t []) = ppVar t
 ppType t            = error $ "Waldmeister: cannot handle any sophisticated types: " ++ show (SMT.ppType t)
 
 ppSig :: (Ord a,PrettyVar a) => Signature a -> Doc
-ppSig (Signature f (PolyType [] arg_types res_type)) =
+ppSig (Signature f _ (PolyType [] arg_types res_type)) =
   hsep $ [ppVar f,":"] ++ map ppType arg_types ++ ["->",ppType res_type]
 
 ppFormula :: (Ord a, PrettyVar a) => Formula a -> Doc

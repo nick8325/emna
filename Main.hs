@@ -5,12 +5,14 @@
 {-# LANGUAGE Rank2Types #-}
 module Main where
 
-import Tip.HaskellFrontend
+import Tip.GHC(readHaskellFile)
 import Tip.QuickSpec
+import Tip.Haskell.Translate(QuickSpecParams(..))
 import Tip.Core hiding (Unknown)
 import Tip.Fresh
 import Tip.Passes
 import Tip.Pretty
+import Tip.Parser
 import Tip.Scope
 import Tip.Pretty.SMT as SMT
 
@@ -54,7 +56,6 @@ data Args =
   Args
     { file    :: String
     , explore :: Bool
-    , extra   :: [String]
     , indvars :: Int
     , timeout :: Double
     , filenames :: Bool
@@ -67,7 +68,6 @@ defArgs =
   Args
     { file    = ""    &= argPos 0 &= typFile
     , explore = True  &= name "e" &= help "Explore theory"
-    , extra   = []                &= help "Additional functions for exploration"
     , indvars = 1     &= name "v" &= help "Number of variables to do induction on"
     , timeout = 1     &= name "t" &= help "Timeout in seconds (default 1)"
     , filenames = False           &= help "Print out filenames of theories"
@@ -78,16 +78,18 @@ defArgs =
 main :: IO ()
 main = do
   args@Args{..} <- cmdArgs defArgs
-  x <- readHaskellOrTipFile file defaultParams{ extra_names = extra }
+  x <- parseFile file
   case x of
     Left err  -> putStrLn err
     Right thy ->
-      do let (rmb,p) = case prover of
-                        'w':_ -> (True, waldmeister)
-                        'z':_ -> (False,z3)
+      do let
+           thy' = thy { thy_asserts = map makeUserAsserted (thy_asserts thy) }
+           (rmb,p) = case prover of
+             'w':_ -> (True, waldmeister)
+             'z':_ -> (False,z3)
          l <- loop args p =<<
-           ((if explore then exploreTheory else return)
-            (passes rmb (ren thy)) )
+           ((if explore then exploreTheory (QuickSpecParams []) else return)
+            (passes rmb (ren thy')) )
          case l of
            Left  e -> error $ "Failed to prove formula(s):\n  " ++ (intercalate "\n  " e)
            Right m -> do putStrLn "\nSummary:"
@@ -111,15 +113,17 @@ instance PrettyVar I where
   varStr (I x s) = s
 
 instance Name I where
-  fresh             = refresh (I undefined "x")
-  refresh (I _ s)   = do u <- fresh; return (I u s)
-  freshNamed s      = refresh (I undefined s)
+  freshNamed s = do u <- fresh; return (I u s)
   getUnique (I u _) = u
 
+makeUserAsserted :: Formula a -> Formula a
+makeUserAsserted = putAttr userAsserted ()
+
 isUserAsserted :: Formula a -> Bool
-isUserAsserted f = case (fm_info f) of
-                     UserAsserted -> True
-                     _            -> False
+isUserAsserted f =
+  case info f of
+    UserAsserted -> True
+    _            -> False
 
 showFormula :: Name a => Formula a -> Theory a -> String
 showFormula fm thy = ppTerm $ toTerm $ snd $ extractQuantifiedLocals fm thy
@@ -154,7 +158,9 @@ loop args prover thy = go False conjs [] thy{ thy_asserts = assums }
          Nothing -> go b    cs (c:q) thy
 
 makeProved :: Int -> Formula a -> Formula a
-makeProved i (Formula _ _ tvs b) = Formula Assert (Lemma i) tvs b
+makeProved i (Formula _ attrs tvs b) =
+  putAttr speculatedLemma i $
+  Formula Assert attrs tvs b
 
 formulaVars :: Formula a -> [Local a]
 formulaVars = fst . forallView . fm_body
@@ -321,7 +327,7 @@ z3 = Prover
       , SkolemiseConjecture
       , NegateConjecture
       ]
-  , prover_pretty = \ _ thy -> (SMT.ppTheory thy,[])
+  , prover_pretty = \ _ thy -> (SMT.ppTheory SMT.tipKeywords thy,[])
   , prover_pipe =
       \ _ pr@(ProcessResult err out exc) ->
           if "unsat" `isInfixOf` out
@@ -378,7 +384,7 @@ parsePCL axiom_list s =
            , matchEq uv st
            ]
 
-     let collected :: ([String],[Info String],[String])
+     let collected :: ([String],[Info],[String])
          collected@(_,used,_) = collect matches . drop 2 . dropWhile (/= "Proof:") . lines $ out
 
      return (unlines (fmt collected),[ i | Lemma i <- used ])
@@ -392,7 +398,7 @@ parsePCL axiom_list s =
              -}
 
   where
-  fmt :: ([String],[Info String],[String]) -> [String]
+  fmt :: ([String],[Info],[String]) -> [String]
   fmt (eqs,reasons,thm:_)
     = ( " To show: " ++ ppEquation to_show)
     : [ "     " ++ prettyInfo i ++ ": " ++ ppEquation ih
@@ -407,10 +413,11 @@ parsePCL axiom_list s =
           (eqs `zip` ("":[ "[" ++ prettyInfo r ++ "]" | r <- reasons ]))
       ]
     where
-    Just to_show = readEquation (drop (length "  Theorem 1: ") thm)
+    Just to_show =
+      readEquation (drop (length "  Theorem 1: ") thm)
     l = maximum (0:map length eqs)
 
-  collect :: [(Int,Info String)] -> [String] -> ([String],[Info String],[String])
+  collect :: [(Int,Info)] -> [String] -> ([String],[Info],[String])
   collect ms ((' ':' ':' ':' ':t):ts)
     | Just u <- readTerm t
     , (a,b,c) <- collect ms ts
@@ -445,7 +452,7 @@ parsePCL axiom_list s =
 
   byax = "by Axiom "
 
-prettyInfo :: Info String -> String
+prettyInfo :: Info -> String
 prettyInfo i =
   case i of
     Definition f      -> ren f ++ " def"
@@ -454,7 +461,6 @@ prettyInfo i =
     DataDomain d      -> ""
     DataProjection d  -> d ++ " projection"
     DataDistinct d    -> ""
-    Defunction f      -> "by defunctionalisation of " ++ f
     UserAsserted      -> ""
     _                 -> ""
 
@@ -507,7 +513,7 @@ niceRename thy_orig thy =
     ]
 
   gbl_rn a _ | varStr a `elem` constructors = varStr a
-  gbl_rn a (FunctionInfo (PolyType _ [] t))
+  gbl_rn a (FunctionInfo (Signature _ _ (PolyType _ [] t)))
     | not (any ((>= 2) . length) interesting)
       || or [ a `elem` xs | xs <- interesting, length xs >= 2 ]
        = case () of
