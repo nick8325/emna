@@ -3,6 +3,10 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE Rank2Types #-}
+{-# LANGUAGE CPP #-}
+#ifdef STACK
+{-# LANGUAGE TemplateHaskell #-}
+#endif
 module Main where
 
 import Tip.GHC(readHaskellFile)
@@ -52,6 +56,11 @@ import System.Process (readProcessWithExitCode)
 import qualified Data.Map as M
 import Data.Map (Map)
 
+#ifdef STACK
+import Language.Haskell.TH.Syntax(lift, qRunIO)
+import System.Process
+#endif
+
 data Args =
   Args
     { file    :: String
@@ -77,6 +86,12 @@ defArgs =
 
 main :: IO ()
 main = do
+#ifdef STACK
+  let pkgdb = $(qRunIO (readProcess "stack" ["exec", "--", "sh", "-c", "echo $GHC_PACKAGE_PATH"] "") >>= lift)
+
+  setEnv "GHC_PACKAGE_PATH" (head (lines pkgdb))
+#endif
+
   args@Args{..} <- cmdArgs defArgs
   x <- parseFile file
   case x of
