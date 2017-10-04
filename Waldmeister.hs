@@ -19,11 +19,16 @@ import Data.Ord (comparing)
 import Control.Monad.State
 import Control.Monad
 
+isValidChar :: Char -> Bool
+isValidChar x
+  | isAlphaNum x = True
+  | x `elem` ("~!@$%^&*_-+=<>.?/" :: String) = True
+  | otherwise = False
+
 validChar :: Char -> String
 validChar x
-  | isAlphaNum x                             = [x]
-  | x `elem` ("~!@$%^&*_-+=<>.?/" :: String) = [x]
-  | otherwise                                = ""
+  | isValidChar x = [x]
+  | otherwise = ""
 
 type AxInfo = [(Info,(Term,Term))]
 
@@ -210,7 +215,7 @@ beautifyTerm s = maybe s ppTerm (readTerm s)
 
 readTerm :: String -> Maybe Term
 readTerm s =
-  case span isAlphaNum s of
+  case span isValidChar s of
     (h,"") -> Just (Node h [])
     (h,t)  -> fmap (Node h) (mapM readTerm =<< matching t)
 
