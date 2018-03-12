@@ -103,7 +103,7 @@ main = do
              'w':_ -> (True, waldmeister)
              'z':_ -> (False,z3)
          l <- loop args p =<<
-           ((if explore then exploreTheory (QuickSpecParams []) else return)
+           ((if explore then exploreTheory (QuickSpecParams [] False) else return)
             (passes rmb (ren thy')) )
          case l of
            Left  e -> error $ "Failed to prove formula(s):\n  " ++ (intercalate "\n  " e)
